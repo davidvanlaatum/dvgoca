@@ -229,10 +229,12 @@ func (ca *CA) SignCertificate(ctx context.Context, cert *x509.Certificate, publi
 }
 
 func (ca *CA) CheckForExpired(ctx context.Context) (err error) {
+	l := logging.FromContext(ctx)
 	return ca.store.BulkUpdate(ctx, CertFindOptions{
 		Status:      dvgoutils.Ptr(CertificateStatusValid),
 		NotAfterEnd: dvgoutils.Ptr(ca.timeSource()),
 	}, func(ctx context.Context, cert *CertificateInfo) (*CertificateInfo, error) {
+		l.InfoContext(ctx, "found expired certificate, marking as expired", "serial", cert.Certificate.SerialNumber, "subject", cert.Certificate.Subject.String(), "not_after", cert.Certificate.NotAfter)
 		cert.Status = CertificateStatusExpired
 		return cert, nil
 	})
