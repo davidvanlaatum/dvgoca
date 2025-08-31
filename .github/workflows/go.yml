@@ -4,48 +4,48 @@
 name: Go
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-  schedule:
-    - cron: '0 0 * * 0'
+    push:
+        branches: [ "main" ]
+    pull_request:
+        branches: [ "main" ]
+    schedule:
+        -   cron: '0 0 * * 0'
 
 jobs:
 
-  build:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: [ '1.24', 'stable' ]
-    steps:
-      - uses: actions/checkout@v5
+    build:
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                go-version: [ '1.24', 'stable' ]
+        steps:
+            -   uses: actions/checkout@v5
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ matrix.go-version }}
-      - name: Install Dependencies
-        run: go mod download
-      - name: Run Tests
-        run: go run gotest.tools/gotestsum@latest --format github-actions -- -race -cover -coverprofile=coverage.out
-      - uses: gwatts/go-coverage-action@v2
-        id: coverage
-        with:
-          # Optional coverage threshold
-          # use fail-coverage to determine what should happen below this threshold
-          coverage-threshold: 80
+            -   name: Set up Go
+                uses: actions/setup-go@v5
+                with:
+                    go-version: ${{ matrix.go-version }}
+            -   name: Install Dependencies
+                run: go mod download
+            -   name: Run Tests
+                run: go run gotest.tools/gotestsum@latest --format github-actions -- -race -cover -coverprofile=coverage.out
+            -   uses: gwatts/go-coverage-action@v2
+                id: coverage
+                with:
+                    # Optional coverage threshold
+                    # use fail-coverage to determine what should happen below this threshold
+                    coverage-threshold: 80
 
-          # collect coverage for all packages beyond the one under test
-          cover-pkg: ./...
-          notes-ref: gocoverage-${{ matrix.go-version }}
-      - name: Update coverage badge
-        uses: schneegans/dynamic-badges-action@v1.7.0
-        if: github.ref_name == 'main' && matrix.go-version == 'stable'
-        with:
-          auth: ${{ secrets.COVERAGE_GIST_SECRET }}
-          gistID: b032fdbcc184230e899558be5c7770a7
-          filename: coverage.json
-          label: Go Coverage
-          message: ${{ steps.coverage.outputs.coverage-pct-1dp }}%
-          color: ${{ steps.coverage.outputs.meets-threshold == 'true' && 'green' || 'red' }}
+                    # collect coverage for all packages beyond the one under test
+                    cover-pkg: ./...
+                    notes-ref: gocoverage-${{ matrix.go-version }}
+            -   name: Update coverage badge
+                uses: schneegans/dynamic-badges-action@v1.7.0
+                if: github.ref_name == 'main' && matrix.go-version == 'stable'
+                with:
+                    auth: ${{ secrets.COVERAGE_GIST_SECRET }}
+                    gistID: b032fdbcc184230e899558be5c7770a7
+                    filename: coverage.json
+                    label: Go Coverage
+                    message: ${{ steps.coverage.outputs.coverage-pct-1dp }}%
+                    color: ${{ steps.coverage.outputs.meets-threshold == 'true' && 'green' || 'red' }}
