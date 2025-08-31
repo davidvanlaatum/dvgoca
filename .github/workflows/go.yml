@@ -36,6 +36,7 @@ jobs:
           # collect coverage for all packages beyond the one under test
           cover-pkg: ./...
           notes-ref: gocoverage-${{ matrix.go-version }}
+          test-args: -race
       - name: Update coverage badge
         uses: schneegans/dynamic-badges-action@v1.7.0
         if: github.ref_name == 'main' && matrix.go-version == 'stable'
