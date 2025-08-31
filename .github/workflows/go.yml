@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: [ '1.24' ]
+        go-version: [ '1.24', '1.25' ]
     steps:
       - uses: actions/checkout@v5
 
@@ -35,7 +35,7 @@ jobs:
           cover-pkg: ./...
       - name: Update coverage badge
         uses: schneegans/dynamic-badges-action@v1.7.0
-        if: github.ref_name == 'main'
+        if: github.ref_name == 'main' && matrix.go-version == '1.25'
         with:
           auth: ${{ secrets.COVERAGE_GIST_SECRET }}
           gistID: b032fdbcc184230e899558be5c7770a7

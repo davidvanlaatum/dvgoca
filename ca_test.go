@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -40,6 +41,7 @@ func TestCA_Init(t *testing.T) {
 	_ = os.Remove("ca_cert.pem")
 	l := slog.New(testhandler.NewTestHandler(t))
 	ctx := logging.WithLogger(t.Context(), l)
+	l.InfoContext(ctx, "go version", slog.String("version", runtime.Version()))
 	store := NewInMemoryStore()
 	ca := NewCA(store, WithTimeSource(func() time.Time {
 		return time.Unix(10, 0)
