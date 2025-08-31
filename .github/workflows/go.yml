@@ -25,7 +25,10 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
-
+      - name: Install Dependencies
+        run: go mod download
+      - name: Run Tests
+        run: go run gotest.tools/gotestsum@latest --format github-actions -- -race -cover -coverprofile=coverage.out
       - uses: gwatts/go-coverage-action@v2
         id: coverage
         with:
@@ -36,7 +39,6 @@ jobs:
           # collect coverage for all packages beyond the one under test
           cover-pkg: ./...
           notes-ref: gocoverage-${{ matrix.go-version }}
-          test-args: '["-race"]'
       - name: Update coverage badge
         uses: schneegans/dynamic-badges-action@v1.7.0
         if: github.ref_name == 'main' && matrix.go-version == 'stable'
