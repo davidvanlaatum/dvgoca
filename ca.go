@@ -79,7 +79,7 @@ func (ca *CA) Init(ctx context.Context, gen KeyGenerator, subject pkix.Name) (er
 	template := &x509.Certificate{
 		Subject:               subject,
 		NotBefore:             now,
-		NotAfter:              now.AddDate(10, 0, 0),
+		NotAfter:              now.Add(time.Hour*24*365*10 - time.Second),
 		IsCA:                  true,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,

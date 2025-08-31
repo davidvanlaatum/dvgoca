@@ -44,7 +44,7 @@ func TestCA_Init(t *testing.T) {
 	l.InfoContext(ctx, "go version", slog.String("version", runtime.Version()))
 	store := NewInMemoryStore()
 	ca := NewCA(store, WithTimeSource(func() time.Time {
-		return time.Unix(10, 0)
+		return time.Unix(60, 0)
 	}), WithRand(&dummyRand{}))
 	subject := pkix.Name{
 		Organization:       []string{"Dvca"},
@@ -53,36 +53,47 @@ func TestCA_Init(t *testing.T) {
 	}
 	r.NoError(ca.Init(ctx, NewEd25519KeyGenerator(), subject))
 	caCert := ca.GetCACertificate()
-	defer func() {
-		if t.Failed() {
-			r.NotNil(caCert)
-			r.NotNil(caCert.Raw)
-			f, err := os.Create("ca_cert.pem")
-			r.NoError(err)
-			defer func(f *os.File) {
-				r.NoError(f.Close())
-			}(f)
-			r.NoError(pem.Encode(f, &pem.Block{
-				Type:  "CERTIFICATE",
-				Bytes: caCert.Raw,
-			}))
-		}
-	}()
 	b, _ := pem.Decode([]byte(`-----BEGIN CERTIFICATE-----
 MIIB0zCCAYWgAwIBAgIPAQIDBAUGBwgJCgsMDQ4PMAUGAytlcDA9MQ0wCwYDVQQK
 EwREdmNhMRUwEwYDVQQLEwxEdmNhIFJvb3QgQ0ExFTATBgNVBAMTDER2Y2EgUm9v
-dCBDQTAeFw03MDAxMDEwMDAwMTBaFw03OTEyMzEyMzAwMTBaMD0xDTALBgNVBAoT
+dCBDQTAeFw03MDAxMDEwMDAxMDBaFw03OTEyMzAwMDAwNTlaMD0xDTALBgNVBAoT
 BER2Y2ExFTATBgNVBAsTDER2Y2EgUm9vdCBDQTEVMBMGA1UEAxMMRHZjYSBSb290
 IENBMCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbij
 gZswgZgwDgYDVR0PAQH/BAQDAgEGMB0GA1UdJQQWMBQGCCsGAQUFBwMCBggrBgEF
 BQcDATAPBgNVHRMBAf8EBTADAQH/MCkGA1UdDgQiBCCgUIN9hQcFgsz3OUsJiIR8
 wxLLiCWbiUiZ9vI5zxeRpTArBgNVHSMEJDAigCCgUIN9hQcFgsz3OUsJiIR8wxLL
-iCWbiUiZ9vI5zxeRpTAFBgMrZXADQQCnPaR4SOaMU1qQXCz7MDzwvnTlT1t/FbO2
-GpEvUeIL05Yc+iPEkjByDNlZllrsLvLDkL1GuMrIx1CRrH8a7OAP
+iCWbiUiZ9vI5zxeRpTAFBgMrZXADQQATshVBqOrJJfapQA2ojJy1GEfA1t6S+P0T
+oTBZ1amR/xxzAhsuY0QrvmFhv2S/Us/CplwP171fybBgxgUUMXAE
 -----END CERTIFICATE-----
 `))
 	expectedCert, err := x509.ParseCertificate(b.Bytes)
 	r.NoError(err)
+	expectedCert.Raw = nil
+	expectedCert.RawTBSCertificate = nil
+	expectedCert.Signature = nil
+	defer func(b []byte) {
+		if t.Failed() {
+			if b != nil {
+				f, err := os.Create("ca_cert.pem")
+				r.NoError(err)
+				defer func(f *os.File) {
+					r.NoError(f.Close())
+				}(f)
+				r.NoError(pem.Encode(f, &pem.Block{
+					Type:  "CERTIFICATE",
+					Bytes: b,
+				}))
+			} else {
+				t.Log("raw cert is nil, not writing to file")
+				t.Fail()
+			}
+		}
+	}(caCert.Raw)
+	r.Equal(expectedCert.NotBefore, caCert.NotBefore)
+	r.Equal(expectedCert.NotAfter, caCert.NotAfter)
+	caCert.Raw = nil
+	caCert.RawTBSCertificate = nil
+	caCert.Signature = nil
 	r.NotNil(expectedCert)
 	r.Equal(expectedCert, caCert)
 
