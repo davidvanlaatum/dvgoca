@@ -175,6 +175,7 @@ TSTskVCib/8Zx7hz8i2KUwtNhsbVM4mH8qqEWYU23GSAlM0T4wm4xkxPaBcgZ7No
 }
 
 func TestCA_SignCertificateMaxAttempts(t *testing.T) {
+	t.Parallel()
 	r := require.New(t)
 	l := slog.New(testhandler.NewTestHandler(t))
 	ctx := logging.WithLogger(t.Context(), l)
@@ -210,6 +211,7 @@ func TestCA_SignCertificateMaxAttempts(t *testing.T) {
 }
 
 func TestCA_CheckForExpired(t *testing.T) {
+	t.Parallel()
 	r := require.New(t)
 	l := slog.New(testhandler.NewTestHandler(t))
 	ctx := logging.WithLogger(t.Context(), l)
@@ -242,4 +244,74 @@ func TestCA_CheckForExpired(t *testing.T) {
 	})
 	r.NoError(err)
 	r.Equal(CertificateStatusValid, cert.Status)
+}
+
+func TestCA_SignCertificateRequest(t *testing.T) {
+	t.Parallel()
+	r := require.New(t)
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	store := NewInMemoryStore()
+	ca := NewCA(store, WithTimeSource(func() time.Time {
+		return time.Unix(10, 0)
+	}), WithRand(&dummyRand{offset: true}))
+	subject := pkix.Name{
+		Organization:       []string{"Dvca"},
+		OrganizationalUnit: []string{"Dvca Root CA"},
+		CommonName:         "Dvca Root CA",
+	}
+	r.NoError(ca.Init(ctx, NewEd25519KeyGenerator(), subject))
+	reqKey, err := NewEd25519KeyGenerator().NewKey(&dummyRand{offset: true})
+	r.NoError(err)
+	reqBytes, err := x509.CreateCertificateRequest(&dummyRand{offset: true}, &x509.CertificateRequest{
+		Subject: pkix.Name{
+			Organization:       []string{"Example Org"},
+			OrganizationalUnit: []string{"IT"},
+			CommonName:         "example.com",
+		},
+		DNSNames: []string{"example.com", "www.example.com"},
+	}, reqKey)
+	r.NoError(err)
+	req, err := x509.ParseCertificateRequest(reqBytes)
+	r.NoError(err)
+	cert, err := ca.SignCertificateRequest(ctx, req)
+	r.NoError(err)
+	defer func(b []byte) {
+		if t.Failed() {
+			f, err := os.Create("cert.pem")
+			r.NoError(err)
+			defer func(f *os.File) {
+				r.NoError(f.Close())
+			}(f)
+			r.NoError(pem.Encode(f, &pem.Block{
+				Type:  "CERTIFICATE",
+				Bytes: b,
+			}))
+		}
+	}(cert.Raw)
+	r.NoError(cert.CheckSignatureFrom(ca.GetCACertificate()))
+	cert.Raw = nil
+	cert.RawTBSCertificate = nil
+	cert.Signature = nil
+	b, _ := pem.Decode([]byte(`-----BEGIN CERTIFICATE-----
+MIIB9jCCAaigAwIBAgIQAgMEBQYHCAkKCwwNDg8QETAFBgMrZXAwPTENMAsGA1UE
+ChMERHZjYTEVMBMGA1UECxMMRHZjYSBSb290IENBMRUwEwYDVQQDEwxEdmNhIFJv
+b3QgQ0EwHhcNNzAwMTAxMDAwMDEwWhcNNzEwMTAxMDAwMDEwWjA5MRQwEgYDVQQK
+EwtFeGFtcGxlIE9yZzELMAkGA1UECxMCSVQxFDASBgNVBAMTC2V4YW1wbGUuY29t
+MCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbijgcEw
+gb4wDgYDVR0PAQH/BAQDAgWgMB0GA1UdJQQWMBQGCCsGAQUFBwMCBggrBgEFBQcD
+ATAMBgNVHRMBAf8EAjAAMCkGA1UdDgQiBCCgUIN9hQcFgsz3OUsJiIR8wxLLiCWb
+iUiZ9vI5zxeRpTArBgNVHSMEJDAigCCgUIN9hQcFgsz3OUsJiIR8wxLLiCWbiUiZ
+9vI5zxeRpTAnBgNVHREEIDAeggtleGFtcGxlLmNvbYIPd3d3LmV4YW1wbGUuY29t
+MAUGAytlcANBAL5r8t+8mofI3dx7EGlA4Z32quMzhErM2DLTw9jLIuELc0rlpeSm
+NI8pbWo3Vc1AAELpci7C6g1BHk70fZpwig0=
+-----END CERTIFICATE-----
+`))
+	expectedCert, err := x509.ParseCertificate(b.Bytes)
+	r.NoError(err)
+	expectedCert.Raw = nil
+	expectedCert.RawTBSCertificate = nil
+	expectedCert.Signature = nil
+	r.NotNil(expectedCert)
+	r.Equal(expectedCert, cert)
 }
