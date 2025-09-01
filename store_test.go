@@ -2,6 +2,7 @@ package dvgoca
 
 import (
 	"crypto/x509"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -157,4 +158,31 @@ func TestCertFindOptions_Matches(t *testing.T) {
 			r.Equal(test.matches, test.opts.Matches(test.cert))
 		})
 	}
+}
+
+func TestEndListError(t *testing.T) {
+	r := require.New(t)
+	endListErr := EndListError{}
+	r.Equal("end list", endListErr.Error())
+	var target EndListError
+	r.True(errors.As(endListErr, &target))
+	r.True(errors.Is(endListErr, EndListError{}))
+}
+
+func TestNotFoundError(t *testing.T) {
+	r := require.New(t)
+	notFoundErr := NotFoundError{}
+	r.Equal("not found", notFoundErr.Error())
+	var target NotFoundError
+	r.True(errors.As(notFoundErr, &target))
+	r.True(errors.Is(notFoundErr, NotFoundError{}))
+}
+
+func TestDuplicateSerialError(t *testing.T) {
+	r := require.New(t)
+	dupSerialErr := DuplicateSerialError{}
+	r.Equal("duplicate serial number", dupSerialErr.Error())
+	var target DuplicateSerialError
+	r.True(errors.As(dupSerialErr, &target))
+	r.True(errors.Is(dupSerialErr, DuplicateSerialError{}))
 }

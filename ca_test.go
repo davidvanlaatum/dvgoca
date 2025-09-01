@@ -1,10 +1,12 @@
 package dvgoca
 
 import (
+	"context"
 	"crypto"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"io"
 	"log/slog"
 	"math/big"
@@ -380,4 +382,102 @@ func TestCA_SignCertificate_NotInitialized(t *testing.T) {
 	r.Error(err)
 	var notInitErr CANotInitializedError
 	r.ErrorAs(err, &notInitErr)
+}
+
+func TestCA_SignCertificate_StoreAddError(t *testing.T) {
+	r := require.New(t)
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	store := &mockStore{
+		AddFunc: func(ctx context.Context, cert *CertificateInfo) error {
+			// Only return error for non-CA certs
+			if !cert.CurrentCACert {
+				return errors.New("store add failed")
+			}
+			return nil
+		},
+	}
+	ca := NewCA(store, WithTimeSource(func() time.Time { return time.Unix(10, 0) }))
+	subject := pkix.Name{CommonName: "Test CA"}
+	r.NoError(ca.Init(ctx, NewEd25519KeyGenerator(), subject))
+	cert := &x509.Certificate{Subject: pkix.Name{CommonName: "test"}, NotBefore: ca.timeSource(), NotAfter: ca.timeSource().Add(time.Hour)}
+	key, err := NewEd25519KeyGenerator().NewKey(&dummyRand{})
+	r.NoError(err)
+	_, err = ca.SignCertificate(ctx, cert, key.Public())
+	r.ErrorContains(err, "store add failed")
+}
+
+func TestCA_SignCertificate_StoreAddDuplicateSerial(t *testing.T) {
+	r := require.New(t)
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	attempts := 0
+	store := &mockStore{
+		AddFunc: func(ctx context.Context, cert *CertificateInfo) error {
+			// Only simulate duplicate serial for non-CA certs
+			if !cert.CurrentCACert {
+				attempts++
+				if attempts < 3 {
+					return DuplicateSerialError{}
+				}
+			}
+			return nil
+		},
+	}
+	ca := NewCA(store, WithTimeSource(func() time.Time { return time.Unix(10, 0) }))
+	subject := pkix.Name{CommonName: "Test CA"}
+	r.NoError(ca.Init(ctx, NewEd25519KeyGenerator(), subject))
+	cert := &x509.Certificate{Subject: pkix.Name{CommonName: "test"}, NotBefore: ca.timeSource(), NotAfter: ca.timeSource().Add(time.Hour)}
+	key, err := NewEd25519KeyGenerator().NewKey(&dummyRand{})
+	r.NoError(err)
+	_, err = ca.SignCertificate(ctx, cert, key.Public())
+	r.NoError(err)
+	r.Equal(3, attempts)
+}
+
+func TestCA_CheckForExpired_StoreBulkUpdateError(t *testing.T) {
+	r := require.New(t)
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	store := &mockStore{
+		BulkUpdateFunc: func(ctx context.Context, opts CertFindOptions, cb func(ctx context.Context, cert *CertificateInfo) (*CertificateInfo, error)) error {
+			return errors.New("bulk update failed")
+		},
+	}
+	ca := NewCA(store, WithTimeSource(func() time.Time { return time.Unix(10, 0) }))
+	err := ca.CheckForExpired(ctx)
+	r.ErrorContains(err, "bulk update failed")
+}
+
+// mockStore implements Store and allows error injection for testing
+// Only Add and BulkUpdate are implemented for these tests
+
+type mockStore struct {
+	AddFunc        func(ctx context.Context, cert *CertificateInfo) error
+	BulkUpdateFunc func(ctx context.Context, opts CertFindOptions, cb func(ctx context.Context, cert *CertificateInfo) (*CertificateInfo, error)) error
+}
+
+func (m *mockStore) Find(_ context.Context, _ CertFindOptions) (*CertificateInfo, error) {
+	panic("not implemented")
+}
+func (m *mockStore) Add(_ context.Context, cert *CertificateInfo) error {
+	if m.AddFunc != nil {
+		return m.AddFunc(context.Background(), cert)
+	}
+	return nil
+}
+func (m *mockStore) Update(_ context.Context, _ *CertificateInfo) error {
+	panic("not implemented")
+}
+func (m *mockStore) Delete(_ context.Context, _ *CertificateInfo) error {
+	panic("not implemented")
+}
+func (m *mockStore) List(_ context.Context, _ CertFindOptions, _ func(context.Context, *CertificateInfo) error) error {
+	panic("not implemented")
+}
+func (m *mockStore) BulkUpdate(_ context.Context, _ CertFindOptions, _ func(context.Context, *CertificateInfo) (*CertificateInfo, error)) error {
+	if m.BulkUpdateFunc != nil {
+		return m.BulkUpdateFunc(context.Background(), CertFindOptions{}, nil)
+	}
+	return nil
 }
