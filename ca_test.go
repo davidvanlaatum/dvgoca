@@ -653,3 +653,19 @@ func TestCA_Init_StoreAddFails(t *testing.T) {
 	subject := pkix.Name{CommonName: "fail add"}
 	r.ErrorIs(ca.Init(ctx, NewEd25519KeyGenerator(), subject), errAdd)
 }
+
+func TestCANotInitializedError(t *testing.T) {
+	err := CANotInitializedError{}
+	require.Equal(t, "CA is not initialized", err.Error())
+	var target CANotInitializedError
+	require.True(t, errors.Is(err, CANotInitializedError{}))
+	require.True(t, errors.As(err, &target))
+}
+
+func TestNoCACertError(t *testing.T) {
+	err := NoCACertError{}
+	require.Equal(t, "no CA certificate in store", err.Error())
+	var target NoCACertError
+	require.True(t, errors.Is(err, NoCACertError{}))
+	require.True(t, errors.As(err, &target))
+}
