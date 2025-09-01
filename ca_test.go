@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"errors"
 	"io"
 	"log/slog"
 	"math/big"
@@ -15,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/davidvanlaatum/dvgoutils/logging"
 	"github.com/davidvanlaatum/dvgoutils/logging/testhandler"
 	"github.com/stretchr/testify/require"
@@ -212,6 +212,7 @@ func TestCA_SignCertificateMaxAttempts(t *testing.T) {
 	r.NoError(err)
 	_, err = ca.SignCertificate(ctx, certTemplate, key.Public())
 	r.ErrorContains(err, "max attempts to find a free serial number exceeded")
+	r.NotNil(errors.GetReportableStackTrace(err))
 }
 
 func TestCA_CheckForExpired(t *testing.T) {
@@ -336,6 +337,7 @@ func TestCA_Load_InvalidPrivateKey(t *testing.T) {
 	ca := NewCA(store)
 	err := ca.Load(ctx)
 	r.Error(err)
+	r.NotNil(errors.GetReportableStackTrace(err))
 }
 
 type errorRand struct{}
@@ -347,6 +349,7 @@ func TestCA_newSerial_RandError(t *testing.T) {
 	ca := NewCA(NewInMemoryStore(), WithRand(&errorRand{}))
 	_, err := ca.newSerial()
 	r.Error(err)
+	r.NotNil(errors.GetReportableStackTrace(err))
 }
 
 type errorPubKey struct{}
@@ -360,6 +363,7 @@ func TestCA_fillSubjectKeyId_MarshalError(t *testing.T) {
 	// Use a type that will fail x509.MarshalPKIXPublicKey
 	err := ca.fillSubjectKeyId(cert, &errorPubKey{})
 	r.Error(err)
+	r.NotNil(errors.GetReportableStackTrace(err))
 }
 
 func TestCA_SignCertificateRequest_BadSignature(t *testing.T) {
@@ -371,6 +375,7 @@ func TestCA_SignCertificateRequest_BadSignature(t *testing.T) {
 	csr := &x509.CertificateRequest{Raw: []byte{1, 2, 3}} // invalid
 	_, err := ca.SignCertificateRequest(logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t))), csr)
 	r.Error(err)
+	r.NotNil(errors.GetReportableStackTrace(err))
 }
 
 func TestCA_SignCertificate_NotInitialized(t *testing.T) {
@@ -380,6 +385,7 @@ func TestCA_SignCertificate_NotInitialized(t *testing.T) {
 	cert := &x509.Certificate{Subject: pkix.Name{CommonName: "test"}}
 	_, err := ca.SignCertificate(logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t))), cert, nil)
 	r.Error(err)
+	r.NotNil(errors.GetReportableStackTrace(err))
 	var notInitErr CANotInitializedError
 	r.ErrorAs(err, &notInitErr)
 }
@@ -405,6 +411,7 @@ func TestCA_SignCertificate_StoreAddError(t *testing.T) {
 	r.NoError(err)
 	_, err = ca.SignCertificate(ctx, cert, key.Public())
 	r.ErrorContains(err, "store add failed")
+	r.NotNil(errors.GetReportableStackTrace(err))
 }
 
 func TestCA_SignCertificate_StoreAddDuplicateSerial(t *testing.T) {
@@ -447,6 +454,7 @@ func TestCA_CheckForExpired_StoreBulkUpdateError(t *testing.T) {
 	ca := NewCA(store, WithTimeSource(func() time.Time { return time.Unix(10, 0) }))
 	err := ca.CheckForExpired(ctx)
 	r.ErrorContains(err, "bulk update failed")
+	r.NotNil(errors.GetReportableStackTrace(err))
 }
 
 // mockStore implements Store and allows error injection for testing

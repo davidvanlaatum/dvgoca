@@ -17,7 +17,7 @@ import (
 )
 
 const SerialBitLength = 128
-const maxSerialAttempts = 100
+const maxSerialAttempts = 10
 
 type CANotInitializedError struct {
 }
