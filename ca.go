@@ -89,7 +89,7 @@ func (ca *CA) Init(ctx context.Context, gen KeyGenerator, subject pkix.Name) (er
 		return errors.WithStack(err)
 	}
 	if err = ca.fillSubjectKeyId(template, ca.privateKey.Public()); err != nil {
-		return errors.WithStack(err)
+		return
 	}
 	template.AuthorityKeyId = template.SubjectKeyId
 	l.InfoContext(ctx, "generating CA certificate", "subject", template.Subject.String(), "not_before", template.NotBefore, "not_after", template.NotAfter, "serial", template.SerialNumber)
@@ -152,7 +152,7 @@ func (ca *CA) Load(ctx context.Context) (err error) {
 func (ca *CA) fillSubjectKeyId(cert *x509.Certificate, publicKey crypto.PublicKey) (err error) {
 	var pubBytes []byte
 	if pubBytes, err = x509.MarshalPKIXPublicKey(publicKey); err != nil {
-		return
+		return errors.WithStack(err)
 	}
 	idHash := sha256.Sum256(pubBytes)
 	cert.SubjectKeyId = idHash[:]
@@ -191,12 +191,11 @@ func (ca *CA) SignCertificate(ctx context.Context, cert *x509.Certificate, publi
 		return nil, errors.WithStack(CANotInitializedError{})
 	}
 	if err = ca.fillSubjectKeyId(cert, publicKey); err != nil {
-		return nil, errors.WithStack(err)
+		return
 	}
 	cert.AuthorityKeyId = ca.certificate.SubjectKeyId
 	l := logging.FromContext(ctx)
 	l.InfoContext(ctx, "signing certificate", "subject", cert.Subject.String(), "not_before", cert.NotBefore, "not_after", cert.NotAfter)
-
 	for i := 0; i < maxSerialAttempts; i++ {
 		if cert.SerialNumber, err = ca.newSerial(); err != nil {
 			return nil, err

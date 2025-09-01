@@ -1,9 +1,11 @@
 package dvgoca
 
 import (
+	"crypto"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"log/slog"
 	"math/big"
 	"os"
@@ -314,4 +316,68 @@ NI8pbWo3Vc1AAELpci7C6g1BHk70fZpwig0=
 	expectedCert.Signature = nil
 	r.NotNil(expectedCert)
 	r.Equal(expectedCert, cert)
+}
+
+func TestCA_Load_InvalidPrivateKey(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	ctx := logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t)))
+	// Add a cert with invalid private key bytes
+	cert := &x509.Certificate{SerialNumber: big.NewInt(1)}
+	r.NoError(store.Add(ctx, &CertificateInfo{
+		Certificate:      cert,
+		Status:           CertificateStatusValid,
+		CurrentCACert:    true,
+		CertificateBytes: []byte{1, 2, 3},
+		PrivateKeyBytes:  []byte{0, 1, 2, 3, 4, 5}, // invalid
+	}))
+	ca := NewCA(store)
+	err := ca.Load(ctx)
+	r.Error(err)
+}
+
+type errorRand struct{}
+
+func (e *errorRand) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+func TestCA_newSerial_RandError(t *testing.T) {
+	r := require.New(t)
+	ca := NewCA(NewInMemoryStore(), WithRand(&errorRand{}))
+	_, err := ca.newSerial()
+	r.Error(err)
+}
+
+type errorPubKey struct{}
+
+func (e *errorPubKey) Public() crypto.PublicKey { return e }
+
+func TestCA_fillSubjectKeyId_MarshalError(t *testing.T) {
+	r := require.New(t)
+	ca := NewCA(NewInMemoryStore())
+	cert := &x509.Certificate{}
+	// Use a type that will fail x509.MarshalPKIXPublicKey
+	err := ca.fillSubjectKeyId(cert, &errorPubKey{})
+	r.Error(err)
+}
+
+func TestCA_SignCertificateRequest_BadSignature(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	ca := NewCA(store, WithTimeSource(func() time.Time { return time.Unix(10, 0) }))
+	subject := pkix.Name{CommonName: "Test CA"}
+	r.NoError(ca.Init(logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t))), NewEd25519KeyGenerator(), subject))
+	csr := &x509.CertificateRequest{Raw: []byte{1, 2, 3}} // invalid
+	_, err := ca.SignCertificateRequest(logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t))), csr)
+	r.Error(err)
+}
+
+func TestCA_SignCertificate_NotInitialized(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	ca := NewCA(store)
+	cert := &x509.Certificate{Subject: pkix.Name{CommonName: "test"}}
+	_, err := ca.SignCertificate(logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t))), cert, nil)
+	r.Error(err)
+	var notInitErr CANotInitializedError
+	r.ErrorAs(err, &notInitErr)
 }
