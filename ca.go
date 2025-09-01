@@ -33,12 +33,21 @@ func (e NoCACertError) Error() string {
 	return "no CA certificate in store"
 }
 
+type CertificateCreator func(rand io.Reader, template, parent *x509.Certificate, pub, priv interface{}) ([]byte, error)
+type CertificateParser func(der []byte) (*x509.Certificate, error)
+type PrivateKeyMarshaller func(key any) ([]byte, error)
+type PKCS8PrivateKeyParser func(der []byte) (any, error)
+
 type CA struct {
-	store       Store
-	rand        io.Reader
-	timeSource  TimeSource
-	privateKey  crypto.Signer
-	certificate *x509.Certificate
+	store                Store
+	rand                 io.Reader
+	timeSource           TimeSource
+	privateKey           crypto.Signer
+	certificate          *x509.Certificate
+	createCertificate    CertificateCreator
+	parseCertificate     CertificateParser
+	marshalPrivateKey    PrivateKeyMarshaller
+	parsePKCS8PrivateKey PKCS8PrivateKeyParser
 }
 
 type CAConfig func(*CA)
@@ -57,8 +66,40 @@ func WithTimeSource(timeSource TimeSource) CAConfig {
 	}
 }
 
+func WithCertificateCreator(creator CertificateCreator) CAConfig {
+	return func(ca *CA) {
+		ca.createCertificate = creator
+	}
+}
+
+func WithCertificateParser(parser CertificateParser) CAConfig {
+	return func(ca *CA) {
+		ca.parseCertificate = parser
+	}
+}
+
+func WithPrivateKeyMarshaller(marshaller PrivateKeyMarshaller) CAConfig {
+	return func(ca *CA) {
+		ca.marshalPrivateKey = marshaller
+	}
+}
+
+func WithPKCS8PrivateKeyParser(parser PKCS8PrivateKeyParser) CAConfig {
+	return func(ca *CA) {
+		ca.parsePKCS8PrivateKey = parser
+	}
+}
+
 func NewCA(store Store, cfg ...CAConfig) *CA {
-	c := &CA{store: store, rand: rand.Reader, timeSource: time.Now}
+	c := &CA{
+		store:                store,
+		rand:                 rand.Reader,
+		timeSource:           time.Now,
+		createCertificate:    x509.CreateCertificate,
+		parseCertificate:     x509.ParseCertificate,
+		marshalPrivateKey:    x509.MarshalPKCS8PrivateKey,
+		parsePKCS8PrivateKey: x509.ParsePKCS8PrivateKey,
+	}
 	for _, f := range cfg {
 		f(c)
 	}
@@ -95,13 +136,13 @@ func (ca *CA) Init(ctx context.Context, gen KeyGenerator, subject pkix.Name) (er
 	l.InfoContext(ctx, "generating CA certificate", "subject", template.Subject.String(), "not_before", template.NotBefore, "not_after", template.NotAfter, "serial", template.SerialNumber)
 
 	var certBytes []byte
-	if certBytes, err = x509.CreateCertificate(ca.rand, template, template, ca.privateKey.Public(), ca.privateKey); err != nil {
+	if certBytes, err = ca.createCertificate(ca.rand, template, template, ca.privateKey.Public(), ca.privateKey); err != nil {
 		return errors.WithStack(err)
 	}
 
 	l.InfoContext(ctx, "created CA certificate", "len", len(certBytes))
 
-	if ca.certificate, err = x509.ParseCertificate(certBytes); err != nil {
+	if ca.certificate, err = ca.parseCertificate(certBytes); err != nil {
 		return errors.WithStack(err)
 	}
 
@@ -112,7 +153,7 @@ func (ca *CA) Init(ctx context.Context, gen KeyGenerator, subject pkix.Name) (er
 		CertificateBytes: certBytes,
 	}
 
-	if certInfo.PrivateKeyBytes, err = x509.MarshalPKCS8PrivateKey(ca.privateKey); err != nil {
+	if certInfo.PrivateKeyBytes, err = ca.marshalPrivateKey(ca.privateKey); err != nil {
 		return errors.WithStack(err)
 	}
 
@@ -137,7 +178,7 @@ func (ca *CA) Load(ctx context.Context) (err error) {
 	}
 	l.InfoContext(ctx, "found CA certificate", "len", len(certInfo.CertificateBytes))
 	var key any
-	if key, err = x509.ParsePKCS8PrivateKey(certInfo.PrivateKeyBytes); err != nil {
+	if key, err = ca.parsePKCS8PrivateKey(certInfo.PrivateKeyBytes); err != nil {
 		return errors.WithStack(err)
 	}
 	var ok bool
@@ -201,7 +242,7 @@ func (ca *CA) SignCertificate(ctx context.Context, cert *x509.Certificate, publi
 			return nil, err
 		}
 		var certBytes []byte
-		if certBytes, err = x509.CreateCertificate(ca.rand, cert, ca.certificate, publicKey, ca.privateKey); err != nil {
+		if certBytes, err = ca.createCertificate(ca.rand, cert, ca.certificate, publicKey, ca.privateKey); err != nil {
 			return nil, errors.WithStack(err)
 		}
 
@@ -211,7 +252,7 @@ func (ca *CA) SignCertificate(ctx context.Context, cert *x509.Certificate, publi
 			CertificateBytes: certBytes,
 		}
 
-		if certInfo.Certificate, err = x509.ParseCertificate(certBytes); err != nil {
+		if certInfo.Certificate, err = ca.parseCertificate(certBytes); err != nil {
 			return nil, errors.WithStack(err)
 		}
 

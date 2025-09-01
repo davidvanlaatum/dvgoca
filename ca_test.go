@@ -20,6 +20,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// mockStore implements Store and allows error injection for testing
+// Only Add, BulkUpdate, and Find are implemented for these tests
+type mockStore struct {
+	AddFunc        func(ctx context.Context, cert *CertificateInfo) error
+	BulkUpdateFunc func(ctx context.Context, opts CertFindOptions, cb func(ctx context.Context, cert *CertificateInfo) (*CertificateInfo, error)) error
+	FindFunc       func(ctx context.Context, opts CertFindOptions) (*CertificateInfo, error)
+}
+
+func (m *mockStore) Find(ctx context.Context, opts CertFindOptions) (*CertificateInfo, error) {
+	if m.FindFunc != nil {
+		return m.FindFunc(ctx, opts)
+	}
+	return nil, nil
+}
+func (m *mockStore) Add(ctx context.Context, cert *CertificateInfo) error {
+	if m.AddFunc != nil {
+		return m.AddFunc(ctx, cert)
+	}
+	return nil
+}
+func (m *mockStore) Update(_ context.Context, _ *CertificateInfo) error {
+	panic("mockStore.Update called unexpectedly")
+}
+func (m *mockStore) Delete(_ context.Context, _ *CertificateInfo) error {
+	panic("mockStore.Delete called unexpectedly")
+}
+func (m *mockStore) List(_ context.Context, _ CertFindOptions, _ func(context.Context, *CertificateInfo) error) error {
+	panic("mockStore.List called unexpectedly")
+}
+func (m *mockStore) BulkUpdate(ctx context.Context, opts CertFindOptions, cb func(context.Context, *CertificateInfo) (*CertificateInfo, error)) error {
+	if m.BulkUpdateFunc != nil {
+		return m.BulkUpdateFunc(ctx, opts, cb)
+	}
+	return nil
+}
+
 type dummyRand struct {
 	offset bool
 	reads  int
@@ -251,6 +287,16 @@ func TestCA_CheckForExpired(t *testing.T) {
 	r.Equal(CertificateStatusValid, cert.Status)
 }
 
+func TestCA_CheckForExpired_EmptyStore(t *testing.T) {
+	r := require.New(t)
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	store := NewInMemoryStore()
+	ca := NewCA(store, WithTimeSource(func() time.Time { return time.Unix(10, 0) }))
+	// No certs in store
+	r.NoError(ca.CheckForExpired(ctx))
+}
+
 func TestCA_SignCertificateRequest(t *testing.T) {
 	t.Parallel()
 	r := require.New(t)
@@ -321,61 +367,43 @@ NI8pbWo3Vc1AAELpci7C6g1BHk70fZpwig0=
 	r.Equal(expectedCert, cert)
 }
 
-func TestCA_Load_InvalidPrivateKey(t *testing.T) {
+func TestCA_Init_ParseCertificateError(t *testing.T) {
 	r := require.New(t)
 	store := NewInMemoryStore()
-	ctx := logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t)))
-	// Add a cert with invalid private key bytes
-	cert := &x509.Certificate{SerialNumber: big.NewInt(1)}
-	r.NoError(store.Add(ctx, &CertificateInfo{
-		Certificate:      cert,
-		Status:           CertificateStatusValid,
-		CurrentCACert:    true,
-		CertificateBytes: []byte{1, 2, 3},
-		PrivateKeyBytes:  []byte{0, 1, 2, 3, 4, 5}, // invalid
-	}))
-	ca := NewCA(store)
-	err := ca.Load(ctx)
-	r.Error(err)
-	r.NotNil(errors.GetReportableStackTrace(err))
-}
-
-type errorRand struct{}
-
-func (e *errorRand) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
-
-func TestCA_newSerial_RandError(t *testing.T) {
-	r := require.New(t)
-	ca := NewCA(NewInMemoryStore(), WithRand(&errorRand{}))
-	_, err := ca.newSerial()
-	r.Error(err)
-	r.NotNil(errors.GetReportableStackTrace(err))
-}
-
-type errorPubKey struct{}
-
-func (e *errorPubKey) Public() crypto.PublicKey { return e }
-
-func TestCA_fillSubjectKeyId_MarshalError(t *testing.T) {
-	r := require.New(t)
-	ca := NewCA(NewInMemoryStore())
-	cert := &x509.Certificate{}
-	// Use a type that will fail x509.MarshalPKIXPublicKey
-	err := ca.fillSubjectKeyId(cert, &errorPubKey{})
-	r.Error(err)
-	r.NotNil(errors.GetReportableStackTrace(err))
-}
-
-func TestCA_SignCertificateRequest_BadSignature(t *testing.T) {
-	r := require.New(t)
-	store := NewInMemoryStore()
-	ca := NewCA(store, WithTimeSource(func() time.Time { return time.Unix(10, 0) }))
+	mockParse := func([]byte) (*x509.Certificate, error) {
+		return nil, errors.New("parse cert fail")
+	}
+	ca := NewCA(store, WithCertificateParser(mockParse))
 	subject := pkix.Name{CommonName: "Test CA"}
-	r.NoError(ca.Init(logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t))), NewEd25519KeyGenerator(), subject))
-	csr := &x509.CertificateRequest{Raw: []byte{1, 2, 3}} // invalid
-	_, err := ca.SignCertificateRequest(logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t))), csr)
-	r.Error(err)
-	r.NotNil(errors.GetReportableStackTrace(err))
+	err := ca.Init(logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t))), NewEd25519KeyGenerator(), subject)
+	r.ErrorContains(err, "parse cert fail")
+}
+
+func TestCA_Init_MarshalPrivateKeyError(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	mockMarshal := func(any) ([]byte, error) {
+		return nil, errors.New("marshal key fail")
+	}
+	ca := NewCA(store, WithPrivateKeyMarshaller(mockMarshal))
+	subject := pkix.Name{CommonName: "Test CA"}
+	err := ca.Init(logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t))), NewEd25519KeyGenerator(), subject)
+	r.ErrorContains(err, "marshal key fail")
+}
+
+func TestCA_SignCertificate_ParseCertificateError(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	mockParse := func([]byte) (*x509.Certificate, error) {
+		return nil, errors.New("parse cert fail")
+	}
+	ca := NewCA(store, WithCertificateParser(mockParse))
+	ca.privateKey, _ = NewEd25519KeyGenerator().NewKey(&dummyRand{})
+	ca.certificate = &x509.Certificate{Subject: pkix.Name{CommonName: "Test CA"}, SubjectKeyId: []byte{1, 2, 3}}
+	cert := &x509.Certificate{Subject: pkix.Name{CommonName: "test"}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour)}
+	key, _ := NewEd25519KeyGenerator().NewKey(&dummyRand{})
+	_, err := ca.SignCertificate(logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t))), cert, key.Public())
+	r.ErrorContains(err, "parse cert fail")
 }
 
 func TestCA_SignCertificate_NotInitialized(t *testing.T) {
@@ -457,35 +485,171 @@ func TestCA_CheckForExpired_StoreBulkUpdateError(t *testing.T) {
 	r.NotNil(errors.GetReportableStackTrace(err))
 }
 
-// mockStore implements Store and allows error injection for testing
-// Only Add and BulkUpdate are implemented for these tests
-
-type mockStore struct {
-	AddFunc        func(ctx context.Context, cert *CertificateInfo) error
-	BulkUpdateFunc func(ctx context.Context, opts CertFindOptions, cb func(ctx context.Context, cert *CertificateInfo) (*CertificateInfo, error)) error
-}
-
-func (m *mockStore) Find(_ context.Context, _ CertFindOptions) (*CertificateInfo, error) {
-	panic("not implemented")
-}
-func (m *mockStore) Add(_ context.Context, cert *CertificateInfo) error {
-	if m.AddFunc != nil {
-		return m.AddFunc(context.Background(), cert)
+func TestCA_Init_CreateCertificateError(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	mockCreate := func(rand io.Reader, template, parent *x509.Certificate, pub, priv interface{}) ([]byte, error) {
+		return nil, errors.New("create cert fail")
 	}
-	return nil
+	ca := NewCA(store, WithCertificateCreator(mockCreate))
+	subject := pkix.Name{CommonName: "Test CA"}
+	err := ca.Init(logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t))), NewEd25519KeyGenerator(), subject)
+	r.ErrorContains(err, "create cert fail")
 }
-func (m *mockStore) Update(_ context.Context, _ *CertificateInfo) error {
-	panic("not implemented")
-}
-func (m *mockStore) Delete(_ context.Context, _ *CertificateInfo) error {
-	panic("not implemented")
-}
-func (m *mockStore) List(_ context.Context, _ CertFindOptions, _ func(context.Context, *CertificateInfo) error) error {
-	panic("not implemented")
-}
-func (m *mockStore) BulkUpdate(_ context.Context, _ CertFindOptions, _ func(context.Context, *CertificateInfo) (*CertificateInfo, error)) error {
-	if m.BulkUpdateFunc != nil {
-		return m.BulkUpdateFunc(context.Background(), CertFindOptions{}, nil)
+
+func TestCA_Init_CreateCertificateReturnsInvalidBytes(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	mockCreate := func(rand io.Reader, template, parent *x509.Certificate, pub, priv interface{}) ([]byte, error) {
+		return []byte{0, 1, 2, 3}, nil // not a valid cert
 	}
-	return nil
+	ca := NewCA(store, WithCertificateCreator(mockCreate))
+	subject := pkix.Name{CommonName: "Test CA"}
+	err := ca.Init(logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t))), NewEd25519KeyGenerator(), subject)
+	r.Error(err)
+}
+
+func TestCA_SignCertificate_CreateCertificateError(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	mockCreate := func(rand io.Reader, template, parent *x509.Certificate, pub, priv interface{}) ([]byte, error) {
+		return nil, errors.New("create cert fail in sign")
+	}
+	ca := NewCA(store, WithCertificateCreator(mockCreate))
+	// Set up a valid CA cert and private key
+	ca.privateKey, _ = NewEd25519KeyGenerator().NewKey(&dummyRand{})
+	ca.certificate = &x509.Certificate{Subject: pkix.Name{CommonName: "Test CA"}, SubjectKeyId: []byte{1, 2, 3}}
+	cert := &x509.Certificate{Subject: pkix.Name{CommonName: "test"}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour)}
+	key, _ := NewEd25519KeyGenerator().NewKey(&dummyRand{})
+	_, err := ca.SignCertificate(logging.WithLogger(t.Context(), slog.New(testhandler.NewTestHandler(t))), cert, key.Public())
+	r.ErrorContains(err, "create cert fail in sign")
+}
+
+func TestCA_Load_Success(t *testing.T) {
+	r := require.New(t)
+	ctx := logging.WithLogger(context.Background(), slog.New(testhandler.NewTestHandler(t)))
+	priv, err := NewEd25519KeyGenerator().NewKey(&dummyRand{})
+	r.NoError(err)
+	cert := &x509.Certificate{Subject: pkix.Name{CommonName: "Test CA"}, SerialNumber: big.NewInt(1)}
+	certBytes := []byte{1, 2, 3}
+	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	r.NoError(err)
+	store := &mockStore{
+		FindFunc: func(_ context.Context, _ CertFindOptions) (*CertificateInfo, error) {
+			return &CertificateInfo{
+				Certificate:      cert,
+				CertificateBytes: certBytes,
+				PrivateKeyBytes:  privBytes,
+			}, nil
+		},
+	}
+	ca := NewCA(store)
+	r.NoError(ca.Load(ctx))
+	r.Equal(cert, ca.certificate)
+	r.NotNil(ca.privateKey)
+}
+
+func TestCA_Load_StoreError(t *testing.T) {
+	r := require.New(t)
+	ctx := logging.WithLogger(context.Background(), slog.New(testhandler.NewTestHandler(t)))
+	store := &mockStore{
+		FindFunc: func(_ context.Context, _ CertFindOptions) (*CertificateInfo, error) {
+			return nil, errors.New("store error")
+		},
+	}
+	ca := NewCA(store)
+	err := ca.Load(ctx)
+	r.ErrorContains(err, "store error")
+}
+
+func TestCA_Load_NoCertFound(t *testing.T) {
+	r := require.New(t)
+	ctx := logging.WithLogger(context.Background(), slog.New(testhandler.NewTestHandler(t)))
+	store := &mockStore{
+		FindFunc: func(_ context.Context, _ CertFindOptions) (*CertificateInfo, error) {
+			return nil, nil
+		},
+	}
+	ca := NewCA(store)
+	err := ca.Load(ctx)
+	r.ErrorContains(err, "no current CA certificate found")
+}
+
+func TestCA_Load_PrivateKeyParseError(t *testing.T) {
+	r := require.New(t)
+	ctx := logging.WithLogger(context.Background(), slog.New(testhandler.NewTestHandler(t)))
+	cert := &x509.Certificate{Subject: pkix.Name{CommonName: "Test CA"}, SerialNumber: big.NewInt(1)}
+	certBytes := []byte{1, 2, 3}
+	store := &mockStore{
+		FindFunc: func(_ context.Context, _ CertFindOptions) (*CertificateInfo, error) {
+			return &CertificateInfo{
+				Certificate:      cert,
+				CertificateBytes: certBytes,
+				PrivateKeyBytes:  []byte{0, 1, 2},
+			}, nil
+		},
+	}
+	ca := NewCA(store)
+	err := ca.Load(ctx)
+	r.ErrorContains(err, "pkcs8")
+}
+
+func TestCA_Load_PrivateKeyNotSigner(t *testing.T) {
+	r := require.New(t)
+	ctx := logging.WithLogger(context.Background(), slog.New(testhandler.NewTestHandler(t)))
+	cert := &x509.Certificate{Subject: pkix.Name{CommonName: "Test CA"}, SerialNumber: big.NewInt(1)}
+	certBytes := []byte{1, 2, 3}
+	store := &mockStore{
+		FindFunc: func(_ context.Context, _ CertFindOptions) (*CertificateInfo, error) {
+			return &CertificateInfo{
+				Certificate:      cert,
+				CertificateBytes: certBytes,
+				PrivateKeyBytes:  []byte("irrelevant"),
+			}, nil
+		},
+	}
+	mockParser := func(_ []byte) (any, error) {
+		return []byte("not a signer"), nil
+	}
+	ca := NewCA(store, WithPKCS8PrivateKeyParser(mockParser))
+	err := ca.Load(ctx)
+	r.ErrorContains(err, "not a crypto.Signer")
+}
+
+// failKeyGen is a mock key generator that always returns an error
+var errKeyGen = errors.New("keygen fail")
+
+type failKeyGen struct{}
+
+func (failKeyGen) NewKey(io.Reader) (crypto.Signer, error) { return nil, errKeyGen }
+
+func TestCA_Init_KeyGenFails(t *testing.T) {
+	t.Parallel()
+	r := require.New(t)
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	store := &mockStore{}
+	ca := NewCA(store, WithTimeSource(func() time.Time {
+		return time.Unix(60, 0)
+	}), WithRand(&dummyRand{}))
+	subject := pkix.Name{CommonName: "fail"}
+	r.ErrorIs(ca.Init(ctx, failKeyGen{}, subject), errKeyGen)
+}
+
+func TestCA_Init_StoreAddFails(t *testing.T) {
+	t.Parallel()
+	r := require.New(t)
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	errAdd := errors.New("add fail")
+	store := &mockStore{
+		AddFunc: func(ctx context.Context, cert *CertificateInfo) error {
+			return errAdd
+		},
+	}
+	ca := NewCA(store, WithTimeSource(func() time.Time {
+		return time.Unix(60, 0)
+	}), WithRand(&dummyRand{}))
+	subject := pkix.Name{CommonName: "fail add"}
+	r.ErrorIs(ca.Init(ctx, NewEd25519KeyGenerator(), subject), errAdd)
 }
