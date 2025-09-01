@@ -367,6 +367,44 @@ NI8pbWo3Vc1AAELpci7C6g1BHk70fZpwig0=
 	r.Equal(expectedCert, cert)
 }
 
+func TestCA_SignCertificateRequest_CheckSignatureError(t *testing.T) {
+	t.Parallel()
+	r := require.New(t)
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	store := NewInMemoryStore()
+	ca := NewCA(store, WithTimeSource(func() time.Time {
+		return time.Unix(10, 0)
+	}), WithRand(&dummyRand{offset: true}))
+	subject := pkix.Name{
+		Organization:       []string{"Dvca"},
+		OrganizationalUnit: []string{"Dvca Root CA"},
+		CommonName:         "Dvca Root CA",
+	}
+	r.NoError(ca.Init(ctx, NewEd25519KeyGenerator(), subject))
+	// Create a valid CSR
+	reqKey, err := NewEd25519KeyGenerator().NewKey(&dummyRand{offset: true})
+	r.NoError(err)
+	reqBytes, err := x509.CreateCertificateRequest(&dummyRand{offset: true}, &x509.CertificateRequest{
+		Subject: pkix.Name{
+			Organization:       []string{"Example Org"},
+			OrganizationalUnit: []string{"IT"},
+			CommonName:         "example.com",
+		},
+		DNSNames: []string{"example.com", "www.example.com"},
+	}, reqKey)
+	r.NoError(err)
+	// Tamper with the CSR to invalidate the signature
+	if len(reqBytes) > 0 {
+		reqBytes[len(reqBytes)-1] ^= 0xFF // Flip last byte
+	}
+	req, err := x509.ParseCertificateRequest(reqBytes)
+	r.NoError(err)
+	_, err = ca.SignCertificateRequest(ctx, req)
+	r.Error(err)
+	r.NotNil(errors.GetReportableStackTrace(err))
+}
+
 func TestCA_Init_newSerial_error(t *testing.T) {
 	r := require.New(t)
 	store := NewInMemoryStore()
@@ -374,8 +412,10 @@ func TestCA_Init_newSerial_error(t *testing.T) {
 	ctx := logging.WithLogger(t.Context(), l)
 	ca := NewCA(store, WithRand(badRand{}))
 	subject := pkix.Name{CommonName: "Test CA"}
-	err := ca.Init(ctx, NewEd25519KeyGenerator(), subject)
+	// Use alwaysValidKeyGen to ensure key generation succeeds, so serial fails
+	err := ca.Init(ctx, alwaysValidKeyGen{}, subject)
 	r.Error(err)
+	r.NotNil(errors.GetReportableStackTrace(err))
 }
 
 func TestCA_Init_fillSubjectKeyId_error(t *testing.T) {
@@ -403,6 +443,7 @@ func TestCA_SignCertificate_notInitialized(t *testing.T) {
 	cert := &x509.Certificate{}
 	_, err := ca.SignCertificate(ctx, cert, nil)
 	r.Error(err)
+	r.NotNil(errors.GetReportableStackTrace(err))
 }
 
 func TestCA_SignCertificate_fillSubjectKeyId_error(t *testing.T) {
@@ -777,3 +818,11 @@ func (badSigner) Public() crypto.PublicKey                                  { re
 func (badSigner) Sign(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) { return nil, nil }
 
 type badPubKey struct{}
+
+// alwaysValidKeyGen is a KeyGenerator that always returns a valid Ed25519 key
+// regardless of the random source passed in.
+type alwaysValidKeyGen struct{}
+
+func (alwaysValidKeyGen) NewKey(io.Reader) (crypto.Signer, error) {
+	return NewEd25519KeyGenerator().NewKey(nil)
+}
