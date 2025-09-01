@@ -9,6 +9,49 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCertificateStatus_String(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		s    CertificateStatus
+		want string
+	}{
+		{
+			name: "valid",
+			s:    CertificateStatusValid,
+			want: "valid",
+		},
+		{
+			name: "revoked",
+			s:    CertificateStatusRevoked,
+			want: "revoked",
+		},
+		{
+			name: "expired",
+			s:    CertificateStatusExpired,
+			want: "expired",
+		},
+		{
+			name: "unknown",
+			s:    CertificateStatusUnknown,
+			want: "unknown",
+		},
+		{
+			name: "invalid",
+			s:    CertificateStatus(999),
+			want: "invalid-status(999)",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			r := require.New(t)
+			r.Equal(test.want, test.s.String())
+		})
+	}
+}
+
 func TestCertificateInfo_Clone(t *testing.T) {
 	t.Parallel()
 	r := require.New(t)

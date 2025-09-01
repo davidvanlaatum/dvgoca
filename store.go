@@ -3,10 +3,7 @@ package dvgoca
 import (
 	"context"
 	"math/big"
-	"sync"
 	"time"
-
-	"github.com/cockroachdb/errors"
 )
 
 type CertFindOptions struct {
@@ -68,96 +65,3 @@ type Store interface {
 	List(ctx context.Context, opts CertFindOptions, cb func(ctx context.Context, cert *CertificateInfo) error) error
 	BulkUpdate(ctx context.Context, opts CertFindOptions, cb func(ctx context.Context, cert *CertificateInfo) (*CertificateInfo, error)) error
 }
-
-type InMemoryStore struct {
-	mu    sync.Mutex
-	certs []*CertificateInfo
-}
-
-func NewInMemoryStore() *InMemoryStore {
-	return &InMemoryStore{}
-}
-
-func (s *InMemoryStore) findSerialIndex(serialNumber *big.Int) (int, bool) {
-	for i, c := range s.certs {
-		if c.Certificate.SerialNumber.Cmp(serialNumber) == 0 {
-			return i, true
-		}
-	}
-	return -1, false
-}
-
-func (s *InMemoryStore) Add(_ context.Context, cert *CertificateInfo) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, found := s.findSerialIndex(cert.Certificate.SerialNumber); found {
-		return errors.WithStack(DuplicateSerialError{})
-	}
-	s.certs = append(s.certs, cert.Clone())
-	return nil
-}
-
-func (s *InMemoryStore) Update(_ context.Context, cert *CertificateInfo) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if i, found := s.findSerialIndex(cert.Certificate.SerialNumber); found {
-		s.certs[i] = cert.Clone()
-		return nil
-	}
-	return &NotFoundError{}
-}
-
-func (s *InMemoryStore) Delete(_ context.Context, cert *CertificateInfo) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if i, found := s.findSerialIndex(cert.Certificate.SerialNumber); found {
-		s.certs = append(s.certs[:i], s.certs[i+1:]...)
-		return nil
-	}
-	return &NotFoundError{}
-}
-
-func (s *InMemoryStore) Find(ctx context.Context, opts CertFindOptions) (cert *CertificateInfo, err error) {
-	if err = s.List(ctx, opts, func(ctx context.Context, c *CertificateInfo) error {
-		cert = c
-		return EndListError{}
-	}); errors.Is(err, EndListError{}) {
-		err = nil
-	}
-	if err == nil && cert == nil {
-		err = errors.WithStack(&NotFoundError{})
-	}
-	return
-}
-
-func (s *InMemoryStore) List(ctx context.Context, opts CertFindOptions, cb func(ctx context.Context, cert *CertificateInfo) error) (err error) {
-	for _, cert := range s.certs {
-		if !opts.Matches(cert) {
-			continue
-		}
-		if err = cb(ctx, cert.Clone()); err != nil {
-			return
-		}
-	}
-	return nil
-}
-
-func (s *InMemoryStore) BulkUpdate(ctx context.Context, opts CertFindOptions, cb func(ctx context.Context, cert *CertificateInfo) (*CertificateInfo, error)) (err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i, cert := range s.certs {
-		if !opts.Matches(cert) {
-			continue
-		}
-		var updated *CertificateInfo
-		if updated, err = cb(ctx, cert.Clone()); err != nil {
-			return
-		}
-		if updated != nil {
-			s.certs[i] = updated.Clone()
-		}
-	}
-	return nil
-}
-
-var _ Store = (*InMemoryStore)(nil)
