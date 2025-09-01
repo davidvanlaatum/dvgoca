@@ -367,6 +367,103 @@ NI8pbWo3Vc1AAELpci7C6g1BHk70fZpwig0=
 	r.Equal(expectedCert, cert)
 }
 
+func TestCA_Init_newSerial_error(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	ca := NewCA(store, WithRand(badRand{}))
+	subject := pkix.Name{CommonName: "Test CA"}
+	err := ca.Init(ctx, NewEd25519KeyGenerator(), subject)
+	r.Error(err)
+}
+
+func TestCA_Init_fillSubjectKeyId_error(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	ca := NewCA(store)
+	subject := pkix.Name{CommonName: "Test CA"}
+	gen := &badKeyGen{}
+	err := ca.Init(ctx, gen, subject)
+	r.Error(err)
+}
+
+type badRand struct{}
+
+func (badRand) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+func TestCA_SignCertificate_notInitialized(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	ca := NewCA(store)
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	cert := &x509.Certificate{}
+	_, err := ca.SignCertificate(ctx, cert, nil)
+	r.Error(err)
+}
+
+func TestCA_SignCertificate_fillSubjectKeyId_error(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	ca := NewCA(store)
+	ca.privateKey, _ = NewEd25519KeyGenerator().NewKey(nil)
+	ca.certificate = &x509.Certificate{SubjectKeyId: []byte{1, 2, 3}}
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	cert := &x509.Certificate{}
+	_, err := ca.SignCertificate(ctx, cert, badPubKey{})
+	r.Error(err)
+}
+
+func TestCA_SignCertificate_newSerial_error(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	ca := NewCA(store, WithRand(badRand{}))
+	ca.privateKey, _ = NewEd25519KeyGenerator().NewKey(nil)
+	ca.certificate = &x509.Certificate{SubjectKeyId: []byte{1, 2, 3}}
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	cert := &x509.Certificate{}
+	_, err := ca.SignCertificate(ctx, cert, ca.privateKey.Public())
+	r.Error(err)
+}
+
+func TestCA_SignCertificate_parseCertificate_error(t *testing.T) {
+	r := require.New(t)
+	store := NewInMemoryStore()
+	ca := NewCA(store)
+	ca.privateKey, _ = NewEd25519KeyGenerator().NewKey(nil)
+	ca.certificate = &x509.Certificate{SubjectKeyId: []byte{1, 2, 3}}
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	cert := &x509.Certificate{}
+	ca.createCertificate = func(rand io.Reader, template, parent *x509.Certificate, pub, priv interface{}) ([]byte, error) {
+		return []byte("notacert"), nil
+	}
+	_, err := ca.SignCertificate(ctx, cert, ca.privateKey.Public())
+	r.Error(err)
+}
+
+func TestCA_SignCertificate_storeAdd_error(t *testing.T) {
+	r := require.New(t)
+	store := &mockStore{
+		AddFunc: func(ctx context.Context, cert *CertificateInfo) error {
+			return errors.New("store add error")
+		},
+	}
+	ca := NewCA(store)
+	ca.privateKey, _ = NewEd25519KeyGenerator().NewKey(nil)
+	ca.certificate = &x509.Certificate{SubjectKeyId: []byte{1, 2, 3}}
+	l := slog.New(testhandler.NewTestHandler(t))
+	ctx := logging.WithLogger(t.Context(), l)
+	cert := &x509.Certificate{}
+	_, err := ca.SignCertificate(ctx, cert, ca.privateKey.Public())
+	r.Error(err)
+}
+
 func TestCA_Init_ParseCertificateError(t *testing.T) {
 	r := require.New(t)
 	store := NewInMemoryStore()
@@ -669,3 +766,14 @@ func TestNoCACertError(t *testing.T) {
 	require.True(t, errors.Is(err, NoCACertError{}))
 	require.True(t, errors.As(err, &target))
 }
+
+type badKeyGen struct{}
+
+func (badKeyGen) NewKey(io.Reader) (crypto.Signer, error) { return badSigner{}, nil }
+
+type badSigner struct{}
+
+func (badSigner) Public() crypto.PublicKey                                  { return badPubKey{} }
+func (badSigner) Sign(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) { return nil, nil }
+
+type badPubKey struct{}
