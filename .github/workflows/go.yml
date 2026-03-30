@@ -44,7 +44,7 @@ jobs:
           cover-pkg: ./...
           notes-ref: gocoverage-${{ matrix.go-version }}
       - name: Update coverage badge
-        uses: schneegans/dynamic-badges-action@v1.7.0
+        uses: schneegans/dynamic-badges-action@v1.8.0
         if: github.ref_name == 'main' && matrix.go-version == 'stable'
         with:
           auth: ${{ secrets.COVERAGE_GIST_SECRET }}
