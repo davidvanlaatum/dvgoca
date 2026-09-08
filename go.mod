@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/cockroachdb/errors v1.14.0
-	github.com/davidvanlaatum/dvgoutils v0.0.0-20250831054724-e8d6c49bc3b4
+	github.com/davidvanlaatum/dvgoutils v0.0.1
 	github.com/stretchr/testify v1.12.1
 )
 
